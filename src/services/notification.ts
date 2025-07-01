@@ -1,13 +1,26 @@
 import { supabase } from '../database';
 import { Telegram } from 'telegraf';
 
+interface PendingMessage {
+  id: number;
+  user_name: string;
+  telegram_id: number;
+  grup_id?: number;
+  bot_message: string;
+  is_send: boolean;
+  sent_at?: string;
+}
+
 export class NotificationService {
+  // Set untuk mencegah duplikasi pengiriman
+  private static processedMessages = new Set<string>();
+
   static async processAndSendNotifications(telegram: Telegram): Promise<void> {
     try {
       // Ambil semua data dari user_roles yang memiliki bot_message dan belum terkirim
       const { data: pendingMessages, error: fetchError } = await supabase
         .from('user_roles')
-        .select('id, user_name, telegram_id, bot_message, is_send')
+        .select('id, user_name, telegram_id, grup_id, bot_message, is_send, sent_at')
         .not('bot_message', 'is', null)
         .not('bot_message', 'eq', '')
         .eq('is_send', false);
@@ -25,8 +38,16 @@ export class NotificationService {
       console.log(`🔔 Processing ${pendingMessages.length} pending messages...`);
 
       // Proses setiap pesan yang pending
-      for (const messageData of pendingMessages) {
-        const { id, user_name, telegram_id, bot_message } = messageData;
+      for (const messageData of pendingMessages as PendingMessage[]) {
+        const { id, user_name, telegram_id, grup_id, bot_message } = messageData;
+
+        // Buat key unik untuk mencegah duplikasi
+        const messageKey = `${id}_${telegram_id}_${grup_id || 'private'}`;
+        
+        if (this.processedMessages.has(messageKey)) {
+          console.log(`⚠️ Skipping duplicate message for ${user_name} (${messageKey})`);
+          continue;
+        }
 
         if (!telegram_id) {
           console.log(`⚠️ No telegram_id for role: ${user_name}`);
@@ -34,13 +55,23 @@ export class NotificationService {
         }
 
         try {
-          // Kirim pesan ke telegram_id
-          await telegram.sendMessage(telegram_id, `📋 Laporan untuk ${user_name}
+          // Tentukan target chat (grup atau personal)
+          const chatId = grup_id || telegram_id;
+          const chatType = grup_id ? 'grup' : 'personal';
+          
+          // Format pesan
+          const message = `📋 Laporan
 
 ${bot_message}
 
 —
-Dikirim secara otomatis oleh sistem`);
+Dikirim secara otomatis ke ${chatType}`;
+
+          // Kirim pesan
+          await telegram.sendMessage(chatId, message);
+
+          // Tandai sebagai sudah diproses
+          this.processedMessages.add(messageKey);
 
           // Update status menjadi terkirim
           const currentTime = new Date().toISOString();
@@ -55,12 +86,19 @@ Dikirim secara otomatis oleh sistem`);
           if (updateError) {
             console.error(`❌ Error updating send status for ${user_name}:`, updateError);
           } else {
-            console.log(`✅ Message sent to ${user_name} (${telegram_id}) at ${currentTime}`);
+            console.log(`✅ Message sent to ${user_name} (${chatType}: ${chatId}) at ${currentTime}`);
           }
 
         } catch (sendError) {
           console.error(`❌ Failed to send message to ${user_name} (${telegram_id}):`, sendError);
         }
+      }
+
+      // Bersihkan set jika terlalu besar
+      if (this.processedMessages.size > 1000) {
+        const entries = Array.from(this.processedMessages);
+        this.processedMessages.clear();
+        entries.slice(-500).forEach(entry => this.processedMessages.add(entry));
       }
 
     } catch (error) {

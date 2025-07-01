@@ -1,38 +1,20 @@
 import { supabase } from '../database';
+import { Context } from 'telegraf';
 
 interface VerificationState {
-  step: 'username' | 'role' | 'completed';
+  step: 'username' | 'role' | 'completed' | 'indexing';
   username?: string;
   role?: string;
-  attempts: number;
-  penalties: number;
-  lastAttemptTime?: number;
-  penaltyEndTime?: number;
+  chatType?: string;
+  groupId?: number;
 }
 
 const userVerification = new Map<number, VerificationState>();
 
 export class VerificationManager {
-  private static MAX_ATTEMPTS = 3;
-  private static PENALTY_DURATION = 15000; // 15 detik dalam milidetik
-
-  static isUserPenalized(userId: number): boolean {
-    const state = userVerification.get(userId);
-    if (!state?.penaltyEndTime) return false;
-    return Date.now() < state.penaltyEndTime;
-  }
-
-  static getRemainingPenaltyTime(userId: number): number {
-    const state = userVerification.get(userId);
-    if (!state?.penaltyEndTime) return 0;
-    return Math.max(0, state.penaltyEndTime - Date.now());
-  }
-
   static initializeVerification(userId: number) {
     userVerification.set(userId, {
-      step: 'username',
-      attempts: 0,
-      penalties: 0
+      step: 'username'
     });
   }
 
@@ -70,37 +52,6 @@ export class VerificationManager {
     }
   }
 
-  static handleFailedAttempt(userId: number): { blocked: boolean; waitTime: number } {
-    const state = userVerification.get(userId);
-    if (!state) return { blocked: false, waitTime: 0 };
-
-    state.attempts++;
-
-    if (state.attempts >= this.MAX_ATTEMPTS) {
-      state.penalties++;
-      state.attempts = 0;
-      const penaltyMultiplier = state.penalties;
-      const penaltyDuration = this.PENALTY_DURATION * penaltyMultiplier;
-      state.penaltyEndTime = Date.now() + penaltyDuration;
-      userVerification.set(userId, state);
-      
-      return { blocked: true, waitTime: penaltyDuration };
-    }
-
-    userVerification.set(userId, state);
-    return { blocked: false, waitTime: 0 };
-  }
-
-  static resetPenalties(userId: number) {
-    const state = userVerification.get(userId);
-    if (state) {
-      state.attempts = 0;
-      state.penalties = 0;
-      state.penaltyEndTime = undefined;
-      userVerification.set(userId, state);
-    }
-  }
-
   static getVerificationState(userId: number): VerificationState | undefined {
     return userVerification.get(userId);
   }
@@ -109,6 +60,140 @@ export class VerificationManager {
     const currentState = userVerification.get(userId);
     if (currentState) {
       userVerification.set(userId, { ...currentState, ...updates });
+    }
+  }
+
+  // Validasi untuk grup - cek apakah user adalah admin di grup yang terdaftar
+  static async isUserAuthorizedInGroup(ctx: Context): Promise<boolean> {
+    try {
+      if (!ctx.chat || ctx.chat.type === 'private') {
+        return false;
+      }
+
+      const userId = ctx.from?.id;
+      const groupId = ctx.chat.id;
+      
+      if (!userId) return false;
+
+      // Dapatkan administrator grup
+      const admins = await ctx.telegram.getChatAdministrators(groupId);
+      
+      // Cek apakah user adalah admin di grup Telegram
+      const isGroupAdmin = admins.some(admin => admin.user.id === userId);
+      
+      if (!isGroupAdmin) {
+        return false;
+      }
+
+      // Cek apakah user terdaftar sebagai admin di sistem DAN grup ini terdaftar
+      return await this.isAuthorizedAdminInGroup(userId, groupId);
+    } catch (error) {
+      console.error('Error checking group authorization:', error);
+      return false;
+    }
+  }
+
+  // Cek apakah user adalah admin sistem yang diizinkan di grup ini
+  static async isAuthorizedAdminInGroup(userId: number, groupId: number): Promise<boolean> {
+    try {
+      const { data, error } = await supabase
+        .from('user_roles')
+        .select('user_name, role_id, grup_id, telegram_id')
+        .eq('telegram_id', userId)
+        .eq('role_id', 1) // hanya admin
+        .eq('grup_id', groupId)
+        .single();
+
+      if (error) {
+        console.log('User tidak diizinkan di grup ini:', error);
+        return false;
+      }
+
+      return data !== null;
+    } catch (error) {
+      console.error('Error checking admin authorization in group:', error);
+      return false;
+    }
+  }
+
+  // Cek apakah user adalah admin sistem (untuk private chat)
+  static async isSystemAdmin(userId: number): Promise<boolean> {
+    try {
+      const { data, error } = await supabase
+        .from('user_roles')
+        .select('user_name, role_id, telegram_id')
+        .eq('telegram_id', userId)
+        .eq('role_id', 1) // hanya admin
+        .single();
+
+      if (error) return false;
+      return data !== null;
+    } catch (error) {
+      console.error('Error checking system admin status:', error);
+      return false;
+    }
+  }
+
+  // Validasi akses berdasarkan tipe chat
+  static async validateAccess(ctx: Context): Promise<boolean> {
+    // Jika di private chat, cek apakah user adalah admin sistem
+    if (ctx.chat?.type === 'private') {
+      const userId = ctx.from?.id;
+      if (!userId) return false;
+      return await this.isSystemAdmin(userId);
+    }
+
+    // Jika di grup, cek apakah user adalah admin grup yang terdaftar
+    return await this.isUserAuthorizedInGroup(ctx);
+  }
+
+  // Tambahkan grup ke user admin
+  static async addGroupToAdmin(userId: number, groupId: number, groupTitle: string): Promise<boolean> {
+    try {
+      // Cek apakah user adalah admin sistem
+      const isAdmin = await this.isSystemAdmin(userId);
+      if (!isAdmin) {
+        return false;
+      }
+
+      // Update grup_id untuk admin ini
+      const { error } = await supabase
+        .from('user_roles')
+        .update({ grup_id: groupId })
+        .eq('telegram_id', userId)
+        .eq('role_id', 1);
+
+      if (error) {
+        console.error('Error adding group to admin:', error);
+        return false;
+      }
+
+      console.log(`✅ Grup ${groupTitle} (${groupId}) ditambahkan untuk admin ${userId}`);
+      return true;
+    } catch (error) {
+      console.error('Error in addGroupToAdmin:', error);
+      return false;
+    }
+  }
+
+  // Hapus grup dari admin
+  static async removeGroupFromAdmin(userId: number): Promise<boolean> {
+    try {
+      const { error } = await supabase
+        .from('user_roles')
+        .update({ grup_id: null })
+        .eq('telegram_id', userId)
+        .eq('role_id', 1);
+
+      if (error) {
+        console.error('Error removing group from admin:', error);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error in removeGroupFromAdmin:', error);
+      return false;
     }
   }
 }

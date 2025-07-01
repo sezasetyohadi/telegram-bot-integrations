@@ -3,6 +3,7 @@ import * as dotenv from 'dotenv';
 import cron from 'node-cron';
 import { handleStart } from './commands/start';
 import { NotificationService } from './services/notification';
+import { VerificationManager } from './utils/verification';
 
 dotenv.config();
 
@@ -39,6 +40,26 @@ bot.use((ctx, next) => {
   return next();
 });
 
+// Middleware untuk validasi akses grup
+bot.use(async (ctx, next) => {
+  // Skip validasi untuk beberapa update type
+  if (ctx.updateType === 'my_chat_member' || ctx.updateType === 'chat_member') {
+    return next();
+  }
+
+  // Jika di grup, validasi akses
+  if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
+    const hasAccess = await VerificationManager.validateAccess(ctx);
+    
+    if (!hasAccess) {
+      await ctx.reply('❌ Hanya admin yang terdaftar yang dapat menggunakan bot ini di grup.');
+      return;
+    }
+  }
+  
+  return next();
+});
+
 // Register commands
 handleStart(bot);  // Pass bot instance to handleStart
 
@@ -69,6 +90,61 @@ cron.schedule('*/10 * * * * *', async () => {
     console.error('Auto notification error:', error);
   } finally {
     cronRunning = false;
+  }
+});
+
+// Handle bot ditambahkan ke grup
+bot.on('my_chat_member', async (ctx) => {
+  const update = ctx.update.my_chat_member;
+  const newStatus = update.new_chat_member.status;
+  const oldStatus = update.old_chat_member.status;
+  const addedBy = update.from;
+  const groupId = ctx.chat.id;
+  const groupTitle = (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') 
+    ? ctx.chat.title || 'Unknown Group' 
+    : 'Unknown Group';
+  
+  // Bot ditambahkan ke grup
+  if ((oldStatus === 'left' || oldStatus === 'kicked') && 
+      (newStatus === 'member' || newStatus === 'administrator')) {
+    
+    // Cek apakah yang menambahkan adalah admin sistem
+    const isSystemAdmin = await VerificationManager.isSystemAdmin(addedBy.id);
+    
+    if (!isSystemAdmin) {
+      await ctx.telegram.sendMessage(
+        ctx.chat.id, 
+        '⚠️ Bot hanya dapat ditambahkan oleh admin sistem yang terdaftar.\n' +
+        'Bot akan keluar dari grup ini.'
+      );
+      await ctx.telegram.leaveChat(ctx.chat.id);
+      return;
+    }
+    
+    // Tambahkan grup ke admin yang menambahkan bot
+    const groupAdded = await VerificationManager.addGroupToAdmin(addedBy.id, groupId, groupTitle);
+    
+    if (groupAdded) {
+      await ctx.reply(
+        `✅ Bot berhasil ditambahkan ke grup ${groupTitle}!\n\n` +
+        '🔒 Hanya admin yang terdaftar yang dapat menggunakan bot ini.\n' +
+        '📝 Grup ini telah didaftarkan untuk admin yang menambahkan bot.\n\n' +
+        'Ketik /start untuk memulai atau /menu untuk melihat fitur bot.'
+      );
+    } else {
+      await ctx.reply('❌ Gagal mendaftarkan grup. Silakan coba lagi.');
+    }
+  }
+  
+  // Bot dikeluarkan dari grup
+  if (newStatus === 'left' || newStatus === 'kicked') {
+    console.log(`Bot dikeluarkan dari grup: ${groupTitle} (${groupId})`);
+    
+    // Hapus grup dari admin (opsional)
+    if (addedBy?.id) {
+      await VerificationManager.removeGroupFromAdmin(addedBy.id);
+      console.log(`Grup ${groupTitle} dihapus dari admin ${addedBy.id}`);
+    }
   }
 });
 
