@@ -1,0 +1,29 @@
+{
+  "name": "telegram-bot-integration",
+  "version": "1.0.0",
+  "main": "bot.ts",
+  "scripts": {
+    "start-bot": "ts-node src/bot.ts",
+    "dev": "nodemon --exec ts-node src/bot.ts",
+    "start-server": "ts-node src/server.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.14.1",
+    "@types/node-cron": "^3.0.11",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "node-cron": "^3.0.3",
+    "telegraf": "^4.16.3"
+  }
+}
