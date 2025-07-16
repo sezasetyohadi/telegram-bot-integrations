@@ -8,9 +8,8 @@ const processedMessages = new Set<string>();
 export function handleStart(bot: Telegraf) {
   // Set menu commands untuk bot
   bot.telegram.setMyCommands([
-    { command: 'start', description: 'Mulai verifikasi' },
+    { command: 'start', description: 'Mulai verifikasi dan sambungkan grup' },
     { command: 'menu', description: 'Tampilkan menu utama' },
-    { command: 'indexmsg', description: 'Index pesan untuk notifikasi' },
     { command: 'status', description: 'Lihat status notifikasi' }
   ]);
 
@@ -20,13 +19,41 @@ export function handleStart(bot: Telegraf) {
     
     if (!userId) return ctx.reply('❌ Tidak dapat mengidentifikasi user.');
 
-    // Jika di grup, cek apakah user adalah admin yang diizinkan
+    // Jika di grup, cek apakah user adalah admin yang diizinkan dan sambungkan grup
     if (chatType === 'group' || chatType === 'supergroup') {
       const hasAccess = await VerificationManager.validateAccess(ctx);
       
       if (!hasAccess) {
-        await ctx.reply('❌ Anda tidak memiliki akses untuk menggunakan bot di grup ini.');
-        return;
+        const isAdmin = await VerificationManager.isSystemAdmin(userId);
+        if (!isAdmin) {
+          await ctx.reply('❌ Anda tidak memiliki akses untuk menggunakan bot di grup ini.');
+          return;
+        }
+
+        // Jika admin sistem tapi grup belum terhubung, sambungkan otomatis
+        const groupId = ctx.chat?.id;
+        const groupTitle = ctx.chat?.title || 'Grup Tanpa Nama';
+        
+        if (!groupId) {
+          await ctx.reply('❌ Tidak dapat mengidentifikasi grup.');
+          return;
+        }
+        
+        // Tambahkan grup ke admin yang menambahkan bot
+        const groupAdded = await VerificationManager.addGroupToAdmin(userId, groupId, groupTitle);
+        
+        if (groupAdded) {
+          await ctx.reply(
+            `✅ Bot berhasil disambungkan ke grup ${groupTitle}!\n\n` +
+            '🔒 Hanya admin yang terdaftar yang dapat menggunakan bot ini.\n' +
+            '📝 Grup ini telah didaftarkan untuk admin yang menjalankan perintah.\n\n' +
+            'Gunakan /menu untuk melihat fitur yang tersedia.'
+          );
+          return;
+        } else {
+          await ctx.reply('❌ Gagal mendaftarkan grup. Silakan coba lagi.');
+          return;
+        }
       }
 
       // Jika di grup dan sudah tervalidasi, tampilkan pesan selamat datang
@@ -99,7 +126,6 @@ export function handleStart(bot: Telegraf) {
 🔧 Perintah yang tersedia:
 /start - Mulai verifikasi ulang
 /menu - Tampilkan menu ini
-/indexmsg - Index pesan untuk notifikasi
 /status - Lihat status notifikasi`);
   });
   
@@ -119,7 +145,10 @@ export function handleStart(bot: Telegraf) {
       }
     } else if (chatType === 'private') {
       const isAdmin = await VerificationManager.isSystemAdmin(userId);
-      if (!isAdmin) {
+      const isWaspang = await VerificationManager.isWaspang(userId);
+      
+      // Izinkan waspang menggunakan fitur indexmsg di chat pribadi
+      if (!isAdmin && !isWaspang) {
         await ctx.reply('❌ Anda tidak memiliki akses untuk menggunakan fitur ini.');
         return;
       }
@@ -170,7 +199,10 @@ export function handleStart(bot: Telegraf) {
       }
     } else if (chatType === 'private') {
       const isAdmin = await VerificationManager.isSystemAdmin(userId);
-      if (!isAdmin) {
+      const isWaspang = await VerificationManager.isWaspang(userId);
+      
+      // Izinkan waspang untuk melihat status
+      if (!isAdmin && !isWaspang) {
         await ctx.reply('❌ Anda tidak memiliki akses untuk menggunakan fitur ini.');
         return;
       }
@@ -248,7 +280,9 @@ export function handleStart(bot: Telegraf) {
         if (chatType === 'group' || chatType === 'supergroup') {
           hasAccess = await VerificationManager.validateAccess(ctx);
         } else if (chatType === 'private') {
-          hasAccess = await VerificationManager.isSystemAdmin(userId);
+          const isAdmin = await VerificationManager.isSystemAdmin(userId);
+          const isWaspang = await VerificationManager.isWaspang(userId);
+          hasAccess = isAdmin || isWaspang;
         }
 
         if (!hasAccess) {
@@ -272,8 +306,7 @@ export function handleStart(bot: Telegraf) {
             sent_at: null,
             grup_id: grupId // Set grup_id jika di grup
           })
-          .eq('telegram_id', userId)
-          .eq('role_id', 1); // Hanya admin
+          .eq('telegram_id', userId);  // Hapus filter role_id agar waspang bisa menggunakan fitur ini
 
         if (updateError) {
           console.error('Error updating bot_message:', updateError);
@@ -323,11 +356,12 @@ export function handleStart(bot: Telegraf) {
           return ctx.reply('❌ Role harus "waspang" atau "admin". Silakan coba lagi:');
         }
 
-        // Verifikasi hanya admin yang dapat mendaftar
-        if (roleInput === 'waspang') {
-          VerificationManager.updateVerificationState(userId, { step: 'completed' });
-          return ctx.reply('❌ Tidak diizinkan memakai bot');
-        }
+        // CATATAN: Kode ini melarang waspang menggunakan bot
+        // Hapus atau ubah blok ini untuk mengizinkan waspang
+        // if (roleInput === 'waspang') {
+        //   VerificationManager.updateVerificationState(userId, { step: 'completed' });
+        //   return ctx.reply('❌ Tidak diizinkan memakai bot');
+        // }
 
         const isValid = await VerificationManager.verifyCredentials(userId, state.username!, roleInput);
         if (!isValid) {
@@ -362,6 +396,7 @@ export function handleStart(bot: Telegraf) {
             return;
           }
 
+          // Tambahkan log untuk membantu debugging
           console.log(`✅ User verified - Telegram ID: ${userId}, Username: ${telegramUsername}, Input Username: ${state.username}, Role: ${roleInput} (ID: ${roleId})`);
 
           await ctx.reply(`✅ Verifikasi berhasil!

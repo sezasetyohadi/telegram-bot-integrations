@@ -86,6 +86,7 @@ export class VerificationManager {
       }
 
       // Cek apakah user terdaftar sebagai admin di sistem DAN grup ini terdaftar
+      // Untuk grup, hanya admin yang bisa mengakses
       return await this.isAuthorizedAdminInGroup(userId, groupId);
     } catch (error) {
       console.error('Error checking group authorization:', error);
@@ -96,6 +97,7 @@ export class VerificationManager {
   // Cek apakah user adalah admin sistem yang diizinkan di grup ini
   static async isAuthorizedAdminInGroup(userId: number, groupId: number): Promise<boolean> {
     try {
+      // Untuk grup, hanya admin yang diizinkan
       const { data, error } = await supabase
         .from('user_roles')
         .select('user_name, role_id, grup_id, telegram_id')
@@ -136,21 +138,40 @@ export class VerificationManager {
 
   // Validasi akses berdasarkan tipe chat
   static async validateAccess(ctx: Context): Promise<boolean> {
-    // Jika di private chat, cek apakah user adalah admin sistem
+    // Jika di private chat, cek apakah user adalah admin sistem atau waspang
     if (ctx.chat?.type === 'private') {
       const userId = ctx.from?.id;
       if (!userId) return false;
-      return await this.isSystemAdmin(userId);
+      // Cek admin atau waspang
+      return await this.isSystemAdmin(userId) || await this.isWaspang(userId);
     }
 
     // Jika di grup, cek apakah user adalah admin grup yang terdaftar
     return await this.isUserAuthorizedInGroup(ctx);
   }
+  
+  // Cek apakah user adalah waspang
+  static async isWaspang(userId: number): Promise<boolean> {
+    try {
+      const { data, error } = await supabase
+        .from('user_roles')
+        .select('user_name, role_id, telegram_id')
+        .eq('telegram_id', userId)
+        .eq('role_id', 2) // waspang = role_id 2
+        .single();
+
+      if (error) return false;
+      return data !== null;
+    } catch (error) {
+      console.error('Error checking waspang status:', error);
+      return false;
+    }
+  }
 
   // Tambahkan grup ke user admin
   static async addGroupToAdmin(userId: number, groupId: number, groupTitle: string): Promise<boolean> {
     try {
-      // Cek apakah user adalah admin sistem
+      // Cek apakah user adalah admin sistem - untuk grup hanya admin yang diizinkan
       const isAdmin = await this.isSystemAdmin(userId);
       if (!isAdmin) {
         return false;
@@ -179,6 +200,12 @@ export class VerificationManager {
   // Hapus grup dari admin
   static async removeGroupFromAdmin(userId: number): Promise<boolean> {
     try {
+      // Cek apakah user adalah admin (hanya admin yang bisa mengelola grup)
+      const isAdmin = await this.isSystemAdmin(userId);
+      if (!isAdmin) {
+        return false;
+      }
+      
       const { error } = await supabase
         .from('user_roles')
         .update({ grup_id: null })

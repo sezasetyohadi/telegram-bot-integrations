@@ -4,6 +4,11 @@ import cron from 'node-cron';
 import { handleStart } from './commands/start';
 import { NotificationService } from './services/notification';
 import { VerificationManager } from './utils/verification';
+import { GroupManager } from './utils/group-manager';
+import { setupGlobalErrorHandlers } from './utils/error-handler';
+
+// Set up global error handlers to prevent crashes
+setupGlobalErrorHandlers();
 
 dotenv.config();
 
@@ -66,9 +71,18 @@ handleStart(bot);  // Pass bot instance to handleStart
 console.log('✅ All command handlers registered');
 
 // Add global error handler
-bot.catch((err, ctx) => {
-  console.error(`Error for ${ctx.updateType}:`, err);
-  ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi.');
+bot.catch((err: any, ctx) => {
+  console.error(`Error for ${ctx.updateType}:`, err.message || String(err));
+  
+  // Only try to reply if we can - this might fail if the bot was kicked from a group
+  try {
+    ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi.')
+      .catch(replyError => {
+        console.error('Failed to send error message:', replyError.message || String(replyError));
+      });
+  } catch (replyError: any) {
+    console.error('Exception during error handling:', replyError.message || String(replyError));
+  }
 });
 
 // Jadwalkan pengecekan dan pengiriman notifikasi otomatis setiap 10 detik
@@ -81,13 +95,21 @@ cron.schedule('*/10 * * * * *', async () => {
   
   cronRunning = true;
   try {
+    // Verifikasi grup setiap 30 menit (ambil jam dan menit dari tanggal saat ini)
+    const now = new Date();
+    if (now.getMinutes() % 30 === 0 && now.getSeconds() < 10) {
+      console.log('🔄 Menjalankan verifikasi grup...');
+      await GroupManager.verifyAllGroups(bot);
+    }
+    
+    // Proses notifikasi pending
     const pendingCount = await NotificationService.checkPendingMessages();
     if (pendingCount > 0) {
       console.log(`🔔 Found ${pendingCount} pending notifications, processing...`);
       await NotificationService.processAndSendNotifications(bot.telegram);
     }
-  } catch (error) {
-    console.error('Auto notification error:', error);
+  } catch (error: any) {
+    console.error('Auto notification error:', error.message || String(error));
   } finally {
     cronRunning = false;
   }
@@ -131,6 +153,9 @@ bot.on('my_chat_member', async (ctx) => {
         '📝 Grup ini telah didaftarkan untuk admin yang menambahkan bot.\n\n' +
         'Ketik /start untuk memulai atau /menu untuk melihat fitur bot.'
       );
+      
+      // Panggil handler untuk bot ditambahkan ke grup
+      await GroupManager.handleBotAddedToGroup(ctx);
     } else {
       await ctx.reply('❌ Gagal mendaftarkan grup. Silakan coba lagi.');
     }
@@ -145,6 +170,9 @@ bot.on('my_chat_member', async (ctx) => {
       await VerificationManager.removeGroupFromAdmin(addedBy.id);
       console.log(`Grup ${groupTitle} dihapus dari admin ${addedBy.id}`);
     }
+    
+    // Panggil handler untuk bot dihapus dari grup
+    await GroupManager.handleBotRemovedFromGroup(ctx);
   }
 });
 
