@@ -1,11 +1,14 @@
 {
   "name": "telegram-bot-integration",
   "version": "1.0.0",
-  "main": "bot.ts",
+  "main": "dist/bot.js",
   "scripts": {
-    "start": "node dist/index.js",
+    "start": "node dist/bot.js",
     "build": "tsc",
-    "dev": "ts-node src/index.js"
+    "dev": "ts-node src/bot.ts"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "keywords": [],
   "author": "",

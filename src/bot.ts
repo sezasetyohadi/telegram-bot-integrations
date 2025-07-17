@@ -15,6 +15,9 @@ dotenv.config();
 // Token bot HARUS dari environment variable
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
+// Export bot untuk digunakan di file lain
+export { bot };
+
 // Pastikan bot tidak dijalankan multiple kali
 let botStarted = false;
 
@@ -176,18 +179,18 @@ bot.on('my_chat_member', async (ctx) => {
   }
 });
 
-// Jalankan bot
-if (!botStarted) {
-  bot.launch()
-    .then(() => {
-      botStarted = true;
-      console.log('🤖 Bot berjalan!');
-    })
-    .catch(err => console.error('💥 Gagal menjalankan bot:', err));
-} else {
-  console.log('⚠️ Bot sudah berjalan, skip launch');
-}
+// Bot tidak akan dijalankan dari sini lagi, tetapi dari index.ts
+// if (!botStarted) {
+//   bot.launch()
+//     .then(() => {
+//       botStarted = true;
+//       console.log('🤖 Bot berjalan!');
+//     })
+//     .catch(err => console.error('💥 Gagal menjalankan bot:', err));
+// } else {
+//   console.log('⚠️ Bot sudah berjalan, skip launch');
+// }
 
-// Handle shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Handle shutdown tidak lagi diperlukan di sini
+// process.once('SIGINT', () => bot.stop('SIGINT'));
+// process.once('SIGTERM', () => bot.stop('SIGTERM'));
