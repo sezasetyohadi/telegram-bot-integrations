@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "main": "bot.ts",
   "scripts": {
-    "start-bot": "ts-node src/bot.ts",
-    "dev": "nodemon --exec ts-node src/bot.ts",
-    "start-server": "ts-node src/server.ts"
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "dev": "ts-node src/index.js"
   },
   "keywords": [],
   "author": "",
